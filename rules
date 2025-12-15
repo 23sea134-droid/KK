@@ -141,8 +141,8 @@
 
     /* ================================
        3. Device Data & Info
-       CRITICAL: Allow devices to write without auth
-                 Allow authenticated users to read their devices
+       CRITICAL FIX: Allow devices to write without auth
+                     Allow authenticated users to read their devices
        ================================ */
     "devices": {
       "$deviceId": {
@@ -160,25 +160,25 @@
             ".validate": "newData.isString() && newData.val() === $deviceId"
           },
           "deviceName": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "name": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "location": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "type": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "status": {
             ".validate": "newData.isString() && newData.val().matches(/^(online|offline|setup|error|unpaired|maintenance|alert)$/)"
           },
           "version": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "firmwareDate": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "lastSeen": {
             ".validate": "newData.isNumber() && newData.val() > 0"
@@ -197,33 +197,33 @@
               ".validate": "newData.isBoolean()"
             },
             "type": {
-              ".validate": "newData.isString() && newData.val().matches(/^(leak|low_battery|offline|other)$/)"
+              ".validate": "newData.isString() && newData.val().matches(/^(leak|low_battery|offline|other|none)$/)"
             },
             "detectedAt": {
-              ".validate": "newData.isNumber()"
+              ".validate": "newData.isNumber() || !newData.exists()"
             },
             "flowRate": {
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "message": {
-              ".validate": "newData.isString()"
+              ".validate": "newData.isString() || !newData.exists()"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "wifiInfo": {
             "ssid": {
-              ".validate": "newData.isString()"
+              ".validate": "newData.isString() || !newData.exists()"
             },
             "rssi": {
-              ".validate": "newData.isNumber()"
+              ".validate": "newData.isNumber() || !newData.exists()"
             },
             "ip": {
-              ".validate": "newData.isString()"
+              ".validate": "newData.isString() || !newData.exists()"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "$other": {
@@ -236,7 +236,7 @@
           ".write": true,
           
           "deviceId": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "flowRate": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
@@ -244,11 +244,17 @@
           "totalLitres": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
+          "totalUsage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "todayUsage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
           "valveState": {
             ".validate": "newData.isString() && newData.val().matches(/^(OPEN|CLOSED|UNKNOWN)$/)"
           },
           "status": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "timestamp": {
             ".validate": "newData.isNumber() && newData.val() > 0"
@@ -257,10 +263,10 @@
             ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
           },
           "rssi": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "alertFlag": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "$other": {
             ".validate": true
@@ -274,22 +280,22 @@
           ".write": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
           
           "valveControl": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "resetTotal": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "resetWifi": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "silenceAlert": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "acknowledgeAlert": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "timestamp": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "$other": {
             ".validate": true
@@ -300,15 +306,13 @@
     },
 
     /* ================================
-       4. History Data - MULTI-DEVICE SUPPORT
-       Each device maintains its own history tree
-       ESP32 writes to /history/$deviceId/$timestamp
+       4. History Data
        ================================ */
     "history": {
       "$deviceId": {
         // Only device owner can read history
         ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
-        // Device can write history without authentication (ESP32 writes here)
+        // Device can write history without authentication
         ".write": true,
         ".indexOn": ["timestamp"],
 
@@ -322,6 +326,9 @@
           "totalLitres": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
+          "totalUsage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
           "valveState": {
             ".validate": "newData.isString() && newData.val().matches(/^(OPEN|CLOSED|UNKNOWN)$/)"
           },
@@ -332,13 +339,13 @@
             ".validate": "newData.isNumber() && newData.val() > 0"
           },
           "alert": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "alertType": {
-            ".validate": "newData.isString()"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "deviceId": {
-            ".validate": "newData.isString() && newData.val() === $deviceId"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "$other": {
             ".validate": true
@@ -348,8 +355,7 @@
     },
 
     /* ================================
-       5. Analytics Aggregated Data - MULTI-DEVICE
-       Each device has its own analytics tree
+       5. Analytics Aggregated Data
        ================================ */
     "analytics": {
       "$deviceId": {
@@ -385,7 +391,7 @@
                 ".validate": "newData.isNumber() && newData.val() >= 0"
               },
               "$other": {
-                ".validate": false
+                ".validate": true
               }
             },
             "hourly": {
@@ -394,7 +400,7 @@
               }
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           }
         },
@@ -410,7 +416,7 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           }
         },
@@ -426,7 +432,7 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           }
         },
@@ -439,7 +445,7 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           }
         }
@@ -503,19 +509,19 @@
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
             },
             "valveState": {
-              ".validate": "newData.isString()"
+              ".validate": "newData.isString() || !newData.exists()"
             },
             "duration": {
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "timestamp": {
-              ".validate": "newData.isNumber()"
+              ".validate": "newData.isNumber() || !newData.exists()"
             },
             "severity": {
-              ".validate": "newData.isString()"
+              ".validate": "newData.isString() || !newData.exists()"
             },
             "actionRequired": {
-              ".validate": "newData.isBoolean()"
+              ".validate": "newData.isBoolean() || !newData.exists()"
             },
             "$other": {
               ".validate": true
@@ -523,13 +529,13 @@
           },
           "notifications": {
             "emailSent": {
-              ".validate": "newData.isBoolean()"
+              ".validate": "newData.isBoolean() || !newData.exists()"
             },
             "smsSent": {
-              ".validate": "newData.isBoolean()"
+              ".validate": "newData.isBoolean() || !newData.exists()"
             },
             "pushSent": {
-              ".validate": "newData.isBoolean()"
+              ".validate": "newData.isBoolean() || !newData.exists()"
             },
             "emailAt": {
               ".validate": "newData.isString() || !newData.exists()"
@@ -541,18 +547,18 @@
               ".validate": "newData.isString() || !newData.exists()"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         }
       }
     },
 
     /* ================================
-       7. Alert Tracking - PER DEVICE
+       7. Alert Tracking
        ================================ */
     "alertTracking": {
       "$deviceId": {
@@ -561,7 +567,7 @@
         
         "leakAlerts": {
           "lastAlert": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "alertCount": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
@@ -573,13 +579,13 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
         "batteryAlerts": {
           "lastAlert": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "alertCount": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
@@ -588,26 +594,26 @@
             ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
         "cooldowns": {
           "leak": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "battery": {
-            ".validate": "newData.isNumber()"
+            ".validate": "newData.isNumber() || !newData.exists()"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         }
       }
     },
 
     /* ================================
-       8. Leak Events - PER DEVICE
+       8. Leak Events
        ================================ */
     "leakEvents": {
       "$deviceId": {
@@ -617,7 +623,7 @@
         
         "$eventId": {
           "deviceId": {
-            ".validate": "newData.isString() && newData.val() === $deviceId"
+            ".validate": "newData.isString() || !newData.exists()"
           },
           "flowRate": {
             ".validate": "newData.isNumber() && newData.val() >= 0"
@@ -638,31 +644,31 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "autoDetected": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "alertCreated": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "resolved": {
-            ".validate": "newData.isBoolean()"
+            ".validate": "newData.isBoolean() || !newData.exists()"
           },
           "resolvedAt": {
             ".validate": "newData.isNumber() || !newData.exists()"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         }
       }
     },
 
     /* ================================
-       9. Device Configuration - PER DEVICE
+       9. Device Configuration
        ================================ */
     "deviceConfig": {
       "$deviceId": {
         ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
-        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !root.child('deviceOwners').child($deviceId).exists())",
         
         "alertThresholds": {
           "leak": {
@@ -679,7 +685,7 @@
               ".validate": "newData.isBoolean()"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "battery": {
@@ -693,7 +699,7 @@
               ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "dailyLimit": {
@@ -704,11 +710,11 @@
               ".validate": "newData.isNumber() && newData.val() > 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -727,7 +733,7 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "battery": {
@@ -744,11 +750,11 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -767,7 +773,7 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -783,18 +789,18 @@
               ".validate": "newData.isNumber() && newData.val() >= 0"
             },
             "$other": {
-              ".validate": false
+              ".validate": true
             }
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         }
       }
     },
 
     /* ================================
-       10. System Health & Stats - AGGREGATE
+       10. System Health & Stats
        ================================ */
     "system": {
       "stats": {
@@ -815,7 +821,7 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -833,7 +839,7 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -848,7 +854,7 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         }
       },
@@ -880,7 +886,7 @@
             ".validate": "newData.isNumber() && newData.val() >= 0"
           },
           "$other": {
-            ".validate": false
+            ".validate": true
           }
         },
         
@@ -891,3 +897,8 @@
     }
   }
 }
+
+
+
+
+
