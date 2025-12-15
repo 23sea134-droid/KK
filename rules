@@ -1,0 +1,893 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    /* ================================
+       1. User Profiles
+       ================================ */
+    "users": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId",
+
+        "claimedDevices": {
+          "$deviceId": {
+            ".validate": "newData.isBoolean() && newData.val() === true"
+          }
+        },
+
+        "profile": {
+          ".read": true,
+          ".write": "auth != null && auth.uid === $userId",
+          "name": {
+            ".validate": "newData.isString() && newData.val().length <= 100"
+          },
+          "email": {
+            ".validate": "newData.isString()"
+          },
+          "phoneNumber": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "photoURL": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "createdAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "lastLoginAt": {
+            ".validate": "newData.isNumber()"
+          },
+          "alertPreferences": {
+            "email": {
+              ".validate": "newData.isBoolean()"
+            },
+            "sms": {
+              ".validate": "newData.isBoolean()"
+            },
+            "push": {
+              ".validate": "newData.isBoolean()"
+            },
+            "leakThreshold": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "batteryThreshold": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "$other": {
+              ".validate": true
+            }
+          },
+          "$other": {
+            ".validate": true
+          }
+        },
+
+        "devices": {
+          "$deviceKey": {
+            ".read": "auth != null && auth.uid === $userId",
+            ".write": "auth != null && auth.uid === $userId",
+            "deviceId": {
+              ".validate": "newData.isString() && newData.val().length > 0"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 100"
+            },
+            "location": {
+              ".validate": "newData.isString() && newData.val().length <= 100"
+            },
+            "status": {
+              ".validate": "newData.isString()"
+            },
+            "valveStatus": {
+              ".validate": "newData.isString()"
+            },
+            "batteryLevel": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "signalStrength": {
+              ".validate": "newData.isString()"
+            },
+            "totalUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "todayUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "claimedAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "lastAlert": {
+              "type": {
+                ".validate": "newData.isString()"
+              },
+              "timestamp": {
+                ".validate": "newData.isNumber()"
+              },
+              "resolved": {
+                ".validate": "newData.isBoolean()"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "$other": {
+              ".validate": true
+            }
+          },
+          ".indexOn": ["deviceId"]
+        },
+
+        "preferences": {
+          ".read": "auth != null && auth.uid === $userId",
+          ".write": "auth != null && auth.uid === $userId"
+        }
+      }
+    },
+
+    /* ================================
+       2. Device Ownership - CRITICAL
+       This is the single source of truth for device ownership
+       ================================ */
+    "deviceOwners": {
+      "$deviceId": {
+        // Any authenticated user can read to check ownership
+        ".read": "auth != null",
+        // Only allow claiming if device is unclaimed OR you already own it
+        ".write": "auth != null && (!data.exists() || data.val() === auth.uid)",
+        ".validate": "newData.isString() && newData.val().length >= 20"
+      }
+    },
+
+    /* ================================
+       3. Device Data & Info
+       CRITICAL: Allow devices to write without auth
+                 Allow authenticated users to read their devices
+       ================================ */
+    "devices": {
+      "$deviceId": {
+        // Users can read if they own the device OR if device is unclaimed (for discovery)
+        ".read": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !root.child('deviceOwners').child($deviceId).exists())",
+        
+        // Allow ANYONE to write (devices write without authentication)
+        ".write": true,
+
+        "info": {
+          // Devices can write their info without authentication
+          ".write": true,
+          
+          "deviceId": {
+            ".validate": "newData.isString() && newData.val() === $deviceId"
+          },
+          "deviceName": {
+            ".validate": "newData.isString()"
+          },
+          "name": {
+            ".validate": "newData.isString()"
+          },
+          "location": {
+            ".validate": "newData.isString()"
+          },
+          "type": {
+            ".validate": "newData.isString()"
+          },
+          "status": {
+            ".validate": "newData.isString() && newData.val().matches(/^(online|offline|setup|error|unpaired|maintenance|alert)$/)"
+          },
+          "version": {
+            ".validate": "newData.isString()"
+          },
+          "firmwareDate": {
+            ".validate": "newData.isString()"
+          },
+          "lastSeen": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "addedAt": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "batteryPercentage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "batteryVoltage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "alertStatus": {
+            "active": {
+              ".validate": "newData.isBoolean()"
+            },
+            "type": {
+              ".validate": "newData.isString() && newData.val().matches(/^(leak|low_battery|offline|other)$/)"
+            },
+            "detectedAt": {
+              ".validate": "newData.isNumber()"
+            },
+            "flowRate": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "message": {
+              ".validate": "newData.isString()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "wifiInfo": {
+            "ssid": {
+              ".validate": "newData.isString()"
+            },
+            "rssi": {
+              ".validate": "newData.isNumber()"
+            },
+            "ip": {
+              ".validate": "newData.isString()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "$other": {
+            ".validate": true
+          }
+        },
+
+        "data": {
+          // Devices can write data without authentication
+          ".write": true,
+          
+          "deviceId": {
+            ".validate": "newData.isString()"
+          },
+          "flowRate": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "totalLitres": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "valveState": {
+            ".validate": "newData.isString() && newData.val().matches(/^(OPEN|CLOSED|UNKNOWN)$/)"
+          },
+          "status": {
+            ".validate": "newData.isString()"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "batteryPercentage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "rssi": {
+            ".validate": "newData.isNumber()"
+          },
+          "alertFlag": {
+            ".validate": "newData.isBoolean()"
+          },
+          "$other": {
+            ".validate": true
+          }
+        },
+
+        "commands": {
+          // Device can read commands (no auth required)
+          ".read": true,
+          // Only device owner can write commands
+          ".write": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+          
+          "valveControl": {
+            ".validate": "newData.isBoolean()"
+          },
+          "resetTotal": {
+            ".validate": "newData.isBoolean()"
+          },
+          "resetWifi": {
+            ".validate": "newData.isBoolean()"
+          },
+          "silenceAlert": {
+            ".validate": "newData.isBoolean()"
+          },
+          "acknowledgeAlert": {
+            ".validate": "newData.isBoolean()"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber()"
+          },
+          "$other": {
+            ".validate": true
+          }
+        }
+      },
+      ".indexOn": ["info/status"]
+    },
+
+    /* ================================
+       4. History Data - MULTI-DEVICE SUPPORT
+       Each device maintains its own history tree
+       ESP32 writes to /history/$deviceId/$timestamp
+       ================================ */
+    "history": {
+      "$deviceId": {
+        // Only device owner can read history
+        ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+        // Device can write history without authentication (ESP32 writes here)
+        ".write": true,
+        ".indexOn": ["timestamp"],
+
+        "$recordId": {
+          "timestamp": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "flowRate": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "totalLitres": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "valveState": {
+            ".validate": "newData.isString() && newData.val().matches(/^(OPEN|CLOSED|UNKNOWN)$/)"
+          },
+          "batteryPercentage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "recordedAt": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "alert": {
+            ".validate": "newData.isBoolean()"
+          },
+          "alertType": {
+            ".validate": "newData.isString()"
+          },
+          "deviceId": {
+            ".validate": "newData.isString() && newData.val() === $deviceId"
+          },
+          "$other": {
+            ".validate": true
+          }
+        }
+      }
+    },
+
+    /* ================================
+       5. Analytics Aggregated Data - MULTI-DEVICE
+       Each device has its own analytics tree
+       ================================ */
+    "analytics": {
+      "$deviceId": {
+        ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        ".indexOn": ["date"],
+
+        "daily": {
+          "$date": {
+            "date": {
+              ".validate": "newData.isString()"
+            },
+            "totalUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "peakFlow": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "averageFlow": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "duration": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "alerts": {
+              "leakCount": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "lowBatteryCount": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "downtime": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              },
+              "$other": {
+                ".validate": false
+              }
+            },
+            "hourly": {
+              "$hour": {
+                ".validate": "newData.isNumber() && newData.val() >= 0"
+              }
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "weekly": {
+          "$week": {
+            "startDate": {
+              ".validate": "newData.isString()"
+            },
+            "endDate": {
+              ".validate": "newData.isString()"
+            },
+            "totalUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "monthly": {
+          "$month": {
+            "month": {
+              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 12"
+            },
+            "year": {
+              ".validate": "newData.isNumber()"
+            },
+            "totalUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "yearly": {
+          "$year": {
+            "year": {
+              ".validate": "newData.isNumber()"
+            },
+            "totalUsage": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    },
+
+    /* ================================
+       6. Alerts & Notifications
+       ================================ */
+    "alerts": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId",
+        ".indexOn": ["createdAt", "read", "type"],
+        
+        "$alertId": {
+          "id": {
+            ".validate": "newData.isString()"
+          },
+          "type": {
+            ".validate": "newData.isString() && newData.val().matches(/^(leak_detected|low_battery|valve_closed|device_offline|system|maintenance)$/)"
+          },
+          "title": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "message": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          },
+          "deviceId": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "deviceName": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "userId": {
+            ".validate": "newData.isString() && newData.val() === $userId"
+          },
+          "read": {
+            ".validate": "newData.isBoolean()"
+          },
+          "readAt": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "createdAt": {
+            ".validate": "newData.isString()"
+          },
+          "resolved": {
+            ".validate": "newData.isBoolean()"
+          },
+          "resolvedAt": {
+            ".validate": "newData.isString() || !newData.exists()"
+          },
+          "priority": {
+            ".validate": "newData.isString() && newData.val().matches(/^(low|medium|high|critical)$/)"
+          },
+          "data": {
+            "flowRate": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "batteryLevel": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "valveState": {
+              ".validate": "newData.isString()"
+            },
+            "duration": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "timestamp": {
+              ".validate": "newData.isNumber()"
+            },
+            "severity": {
+              ".validate": "newData.isString()"
+            },
+            "actionRequired": {
+              ".validate": "newData.isBoolean()"
+            },
+            "$other": {
+              ".validate": true
+            }
+          },
+          "notifications": {
+            "emailSent": {
+              ".validate": "newData.isBoolean()"
+            },
+            "smsSent": {
+              ".validate": "newData.isBoolean()"
+            },
+            "pushSent": {
+              ".validate": "newData.isBoolean()"
+            },
+            "emailAt": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "smsAt": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "pushAt": {
+              ".validate": "newData.isString() || !newData.exists()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+
+    /* ================================
+       7. Alert Tracking - PER DEVICE
+       ================================ */
+    "alertTracking": {
+      "$deviceId": {
+        ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        
+        "leakAlerts": {
+          "lastAlert": {
+            ".validate": "newData.isNumber()"
+          },
+          "alertCount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "lastFlowRate": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "lastDuration": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "batteryAlerts": {
+          "lastAlert": {
+            ".validate": "newData.isNumber()"
+          },
+          "alertCount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "lastBatteryLevel": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "cooldowns": {
+          "leak": {
+            ".validate": "newData.isNumber()"
+          },
+          "battery": {
+            ".validate": "newData.isNumber()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+
+    /* ================================
+       8. Leak Events - PER DEVICE
+       ================================ */
+    "leakEvents": {
+      "$deviceId": {
+        ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        ".indexOn": ["timestamp"],
+        
+        "$eventId": {
+          "deviceId": {
+            ".validate": "newData.isString() && newData.val() === $deviceId"
+          },
+          "flowRate": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "valveState": {
+            ".validate": "newData.isString() && newData.val().matches(/^(OPEN|CLOSED|UNKNOWN)$/)"
+          },
+          "timestamp": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "batteryPercentage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+          },
+          "totalLitres": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "duration": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "autoDetected": {
+            ".validate": "newData.isBoolean()"
+          },
+          "alertCreated": {
+            ".validate": "newData.isBoolean()"
+          },
+          "resolved": {
+            ".validate": "newData.isBoolean()"
+          },
+          "resolvedAt": {
+            ".validate": "newData.isNumber() || !newData.exists()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+
+    /* ================================
+       9. Device Configuration - PER DEVICE
+       ================================ */
+    "deviceConfig": {
+      "$deviceId": {
+        ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
+        ".write": "auth != null && (root.child('deviceOwners').child($deviceId).val() === auth.uid || !newData.exists())",
+        
+        "alertThresholds": {
+          "leak": {
+            "enabled": {
+              ".validate": "newData.isBoolean()"
+            },
+            "flowRateThreshold": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "durationThreshold": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "valveMustBeClosed": {
+              ".validate": "newData.isBoolean()"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "battery": {
+            "enabled": {
+              ".validate": "newData.isBoolean()"
+            },
+            "lowThreshold": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "criticalThreshold": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "dailyLimit": {
+            ".validate": "newData.isNumber() && newData.val() > 0"
+          },
+          "flowRate": {
+            "high": {
+              ".validate": "newData.isNumber() && newData.val() > 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "notificationSettings": {
+          "leak": {
+            "email": {
+              ".validate": "newData.isBoolean()"
+            },
+            "sms": {
+              ".validate": "newData.isBoolean()"
+            },
+            "push": {
+              ".validate": "newData.isBoolean()"
+            },
+            "cooldownMinutes": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "battery": {
+            "email": {
+              ".validate": "newData.isBoolean()"
+            },
+            "sms": {
+              ".validate": "newData.isBoolean()"
+            },
+            "push": {
+              ".validate": "newData.isBoolean()"
+            },
+            "cooldownHours": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "samplingRate": {
+          ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 3600"
+        },
+        
+        "valveAutoClose": {
+          "enabled": {
+            ".validate": "newData.isBoolean()"
+          },
+          "onLeak": {
+            ".validate": "newData.isBoolean()"
+          },
+          "afterMinutes": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "leakDetection": {
+          "sensitivity": {
+            ".validate": "newData.isString() && newData.val().matches(/^(low|medium|high)$/)"
+          },
+          "autoResolve": {
+            "enabled": {
+              ".validate": "newData.isBoolean()"
+            },
+            "afterMinutes": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "$other": {
+              ".validate": false
+            }
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
+    },
+
+    /* ================================
+       10. System Health & Stats - AGGREGATE
+       ================================ */
+    "system": {
+      "stats": {
+        ".read": "auth != null",
+        ".write": false,
+        
+        "alerts": {
+          "total": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "leaks": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "battery": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "today": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "devices": {
+          "total": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "online": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "withAlerts": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "lowBattery": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "water": {
+          "totalSaved": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "leaksPrevented": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "avgDailyUsage": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      },
+      
+      "health": {
+        ".read": "auth != null",
+        ".write": false,
+        
+        "lastUpdated": {
+          ".validate": "newData.isNumber()"
+        },
+        
+        "activeDevices": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        
+        "totalUsage": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        },
+        
+        "activeAlerts": {
+          "leak": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "battery": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "total": {
+            ".validate": "newData.isNumber() && newData.val() >= 0"
+          },
+          "$other": {
+            ".validate": false
+          }
+        },
+        
+        "uptime": {
+          ".validate": "newData.isNumber() && newData.val() >= 0"
+        }
+      }
+    }
+  }
+}
