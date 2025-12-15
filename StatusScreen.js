@@ -8,7 +8,6 @@ import {
   RefreshControl,
   Alert,
   Linking,
-  AppState,
   Dimensions,
   StatusBar,
   ActivityIndicator,
@@ -18,6 +17,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import { useDeviceData } from '../context/DeviceDataContext';
 import { deviceService } from '../services/deviceService';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTabBar } from '../context/TabBarContext';
@@ -101,35 +101,21 @@ const WaterFlowAnimation = ({ isFlowing }) => {
 const StatusScreen = ({ navigation }) => {
   const { user } = useAuth();
   const { showTabBar } = useTabBar();
+  
+  // Use DeviceDataContext instead of managing own state
+  const { 
+    devices, 
+    loading, 
+    refreshDevices,
+    totalDevices,
+    onlineDevicesCount,
+    offlineDevicesCount 
+  } = useDeviceData();
 
-  // Custom scroll handler to replace useScrollHandler
-  const handleScroll = useCallback((event) => {
-    // Custom scroll logic if needed
-  }, []);
-
-  const onScrollBeginDrag = useCallback(() => {
-    // Custom logic for scroll begin
-  }, []);
-
-  const onMomentumScrollEnd = useCallback(() => {
-    // Custom logic for momentum scroll end
-  }, []);
-
-  const onScrollEndDrag = useCallback(() => {
-    // Custom logic for scroll end drag
-  }, []);
-
-  const [devices, setDevices] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [selectedFilter, setSelectedFilter] = useState('all');
-  const [realtimeEnabled, setRealtimeEnabled] = useState(true);
   const [valveStates, setValveStates] = useState({});
   const [valveLoading, setValveLoading] = useState({});
-  
-  const unsubscribeRef = useRef(null);
-  const isMountedRef = useRef(true);
-  const appStateRef = useRef(AppState.currentState);
 
   useFocusEffect(
     useCallback(() => {
@@ -138,190 +124,24 @@ const StatusScreen = ({ navigation }) => {
     }, [showTabBar])
   );
 
-  const cleanupListeners = useCallback(() => {
-    if (unsubscribeRef.current) {
-      try {
-        // Check if unsubscribe is a function before calling it
-        if (typeof unsubscribeRef.current === 'function') {
-          unsubscribeRef.current();
-        }
-        unsubscribeRef.current = null;
-      } catch (error) {
-        console.error('Error cleaning up listeners:', error);
-      }
-    }
-  }, []);
-
-  const loadDevices = useCallback(async () => {
-    if (!user?.uid || !isMountedRef.current) return;
-    
-    try {
-      setLoading(true);
-      const result = await deviceService.getUserDevices(user.uid);
-      if (result.success && isMountedRef.current) {
-        const devicesList = result.devices || [];
-        setDevices(devicesList);
-        
-        // Update valve states from fresh data
-        const updatedValveStates = {};
-        devicesList.forEach(device => {
-          if (device.data?.valveState !== undefined) {
-            updatedValveStates[device.id] = device.data.valveState === 'OPEN';
-          } else if (device.valveState !== undefined) {
-            updatedValveStates[device.id] = device.valveState === 'OPEN';
-          }
-        });
-        setValveStates(updatedValveStates);
-        
-        console.log(`✅ Loaded ${devicesList.length} devices`);
-      }
-    } catch (error) {
-      console.error('Error loading devices:', error);
-      if (isMountedRef.current) {
-        Alert.alert('Error', 'Failed to load devices. Please try again.');
-      }
-    } finally {
-      if (isMountedRef.current) setLoading(false);
-    }
-  }, [user?.uid]);
-
-  // FIXED: setupRealtimeListeners function with proper cleanup logic
-  const setupRealtimeListeners = useCallback(() => {
-    if (!user?.uid || !isMountedRef.current) return;
-    
-    // Only cleanup if we're switching modes, not on initial setup
-    if (unsubscribeRef.current) {
-      console.log('🧹 Cleaning up old listener before setting up new one');
-      cleanupListeners();
-    }
-    
-    if (realtimeEnabled) {
-      try {
-        const unsubscribe = deviceService.listenToDeviceStatus(
-          user.uid, 
-          (updatedDevices) => {
-            if (isMountedRef.current && Array.isArray(updatedDevices)) {
-              console.log(`🔄 Real-time update: ${updatedDevices.length} devices`);
-              
-              // Don't update if we get an empty array and we already have devices
-              // This prevents the "cleaning" issue
-              if (updatedDevices.length === 0 && devices.length > 0) {
-                console.warn('⚠️ Received empty array in real-time update, keeping existing devices');
-                return;
-              }
-              
-              setDevices(updatedDevices);
-              
-              // Update valve states in real-time
-              const updatedValveStates = {};
-              updatedDevices.forEach(device => {
-                if (device.data?.valveState !== undefined) {
-                  updatedValveStates[device.id] = device.data.valveState === 'OPEN';
-                } else if (device.valveState !== undefined) {
-                  updatedValveStates[device.id] = device.valveState === 'OPEN';
-                }
-              });
-              setValveStates(prev => ({ ...prev, ...updatedValveStates }));
-            }
-          },
-          (error) => {
-            console.error('Realtime listener error:', error);
-            if (isMountedRef.current) {
-              setRealtimeEnabled(false);
-              Alert.alert('Connection Error', 'Real-time updates disabled due to connection issues.');
-            }
-          }
-        );
-        
-        // Only assign if unsubscribe is a valid function
-        if (unsubscribe && typeof unsubscribe === 'function') {
-          unsubscribeRef.current = unsubscribe;
-          console.log('✅ Real-time listener established');
-        } else {
-          console.warn('Invalid unsubscribe function returned from listenToDeviceStatus');
-        }
-      } catch (error) {
-        console.error('Error setting up realtime listener:', error);
-        if (isMountedRef.current) {
-          setRealtimeEnabled(false);
-        }
-      }
-    }
-  }, [user?.uid, realtimeEnabled, devices.length]); // Added devices.length to deps
-
-  const handleAppStateChange = useCallback((nextAppState) => {
-    if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-      if (isMountedRef.current) {
-        console.log('App resumed - reloading devices');
-        loadDevices();
-        setupRealtimeListeners();
-      }
-    } else if (nextAppState.match(/inactive|background/)) {
-      console.log('App backgrounded - cleaning up listeners');
-      cleanupListeners();
-    }
-    appStateRef.current = nextAppState;
-  }, [loadDevices, setupRealtimeListeners, cleanupListeners]);
-
+  // Update valve states when devices change
   useEffect(() => {
-    isMountedRef.current = true;
-    loadDevices();
-    
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    
-    return () => {
-      isMountedRef.current = false;
-      try {
-        subscription?.remove();
-      } catch (error) {
-        console.error('Error removing app state subscription:', error);
+    const updatedValveStates = {};
+    devices.forEach(device => {
+      if (device.data?.valveState !== undefined) {
+        updatedValveStates[device.id] = device.data.valveState === 'OPEN';
+      } else if (device.valveState !== undefined) {
+        updatedValveStates[device.id] = device.valveState === 'OPEN';
       }
-      cleanupListeners();
-    };
-  }, [loadDevices, handleAppStateChange, cleanupListeners]);
-
-  // FIXED: Setup realtime listeners only after initial load is complete
-  //    and only when realtime is enabled
-  useEffect(() => {
-    // Only setup listeners if:
-    // - User is authenticated
-    // - Not currently loading
-    // - Realtime is enabled
-    // - We have at least attempted to load devices
-    if (user?.uid && !loading && realtimeEnabled) {
-      console.log('🔌 Setting up real-time listener...');
-      setupRealtimeListeners();
-      
-      // Cleanup when realtime is disabled or component unmounts
-      return () => {
-        console.log('🔌 Cleaning up real-time listener...');
-        cleanupListeners();
-      };
-    } else if (user?.uid && !loading && !realtimeEnabled) {
-      // If realtime is disabled, make sure listeners are cleaned up
-      cleanupListeners();
-    }
-  }, [user?.uid, loading, realtimeEnabled]); // Removed setupRealtimeListeners from deps
+    });
+    setValveStates(prev => ({ ...prev, ...updatedValveStates }));
+  }, [devices]);
 
   const onRefresh = useCallback(async () => {
-    if (!isMountedRef.current) return;
     setRefreshing(true);
-    await loadDevices();
-    if (isMountedRef.current) setRefreshing(false);
-  }, [loadDevices]);
-
-  const toggleRealtimeUpdates = useCallback(() => {
-    const newState = !realtimeEnabled;
-    setRealtimeEnabled(newState);
-    
-    if (newState && user?.uid) {
-      setupRealtimeListeners();
-      Alert.alert('Real-time Mode', 'Real-time updates enabled');
-    } else {
-      cleanupListeners();
-      Alert.alert('Battery Saver Mode', 'Real-time updates disabled to save battery');
-    }
-  }, [realtimeEnabled, user?.uid, setupRealtimeListeners, cleanupListeners]);
+    await refreshDevices();
+    setRefreshing(false);
+  }, [refreshDevices]);
 
   const toggleValve = useCallback(async (deviceId, deviceName, currentState, deviceStatus) => {
     if (!user?.uid) {
@@ -329,7 +149,6 @@ const StatusScreen = ({ navigation }) => {
       return;
     }
 
-    // ✅ ADD: Check if already processing this device
     if (valveLoading[deviceId]) {
       console.log('Valve operation already in progress for device:', deviceId);
       return;
@@ -355,50 +174,41 @@ const StatusScreen = ({ navigation }) => {
         {
           text: action.charAt(0).toUpperCase() + action.slice(1),
           onPress: async () => {
-            // ✅ SET: Loading state
             setValveLoading(prev => ({ ...prev, [deviceId]: true }));
 
             try {
               console.log(`🔧 Sending valve command: ${action} for device ${deviceId}`);
               
-              // FIXED: Pass deviceId and boolean state (not userId)
               const result = await deviceService.controlValve(deviceId, newState);
               
               if (result.success) {
-                // Update local state immediately for better UX
                 setValveStates(prev => ({ ...prev, [deviceId]: newState }));
                 
                 Alert.alert('Success', `Valve ${action}ed successfully. Changes will be reflected in a few seconds.`);
                 
                 console.log(`✅ Valve command sent successfully`);
                 
-                // Refresh data from Firebase to ensure consistency
-                setTimeout(() => {
-                  console.log('🔄 Refreshing device data...');
-                  loadDevices();
-                }, 2000); // Wait 2 seconds for ESP32 to process command
+                // The DeviceDataContext will automatically update via real-time listeners
+                // No need to manually refresh
               } else {
                 console.error('❌ Valve control failed:', result.error);
                 Alert.alert('Error', result.error || `Failed to ${action} valve`);
                 
-                // Revert local state on failure
                 setValveStates(prev => ({ ...prev, [deviceId]: currentState }));
               }
             } catch (error) {
               console.error('❌ Valve control error:', error);
               Alert.alert('Error', `Failed to ${action} valve. Please try again.`);
               
-              // Revert local state on error
               setValveStates(prev => ({ ...prev, [deviceId]: currentState }));
             } finally {
-              // ✅ CLEAR: Loading state
               setValveLoading(prev => ({ ...prev, [deviceId]: false }));
             }
           }
         }
       ]
     );
-  }, [user?.uid, loadDevices, valveLoading]);
+  }, [user?.uid, valveLoading]);
 
   const getStatusInfo = useCallback((status) => {
     switch (status?.toLowerCase()) {
@@ -475,13 +285,12 @@ const StatusScreen = ({ navigation }) => {
     const statusInfo = getStatusInfo(device.status);
     const isValveOpen = valveStates[device.id] ?? (device.data?.valveState === 'OPEN') ?? (device.valveState === 'OPEN');
     const isValveLoading = valveLoading[device.id] || false;
-    const flowRate = device.data?.flowRate || 0;
-    const totalLitres = device.data?.totalLitres || device.totalUsage || 0;
-    const batteryLevel = device.data?.batteryPercentage || device.batteryLevel || 0;
+    const flowRate = device.data?.flowRate || device.flowRate || 0;
+    const totalLitres = device.data?.totalLitres || device.totalUsage || device.totalLitres || 0;
+    const batteryLevel = device.data?.batteryPercentage || device.batteryLevel || device.batteryPercentage || 0;
     const isOnline = device.status?.toLowerCase() === 'online';
     const actualDeviceId = device.deviceId || device.id;
     
-    // Battery icon logic
     const getBatteryIcon = () => {
       if (batteryLevel > 75) return 'battery-full';
       if (batteryLevel > 25) return 'battery-half';
@@ -496,7 +305,7 @@ const StatusScreen = ({ navigation }) => {
     
     return (
       <TouchableOpacity
-        key={device.id || index}
+        key={device.id || device.deviceId || index}
         style={styles.deviceCard}
         onPress={() => handleDeviceAction(device)}
         activeOpacity={0.9}
@@ -645,9 +454,9 @@ const StatusScreen = ({ navigation }) => {
 
   const filteredDevices = getFilteredDevices();
   const statusCounts = {
-    all: devices.length,
-    online: devices.filter(d => d.status?.toLowerCase() === 'online').length,
-    offline: devices.filter(d => d.status?.toLowerCase() === 'offline').length,
+    all: totalDevices,
+    online: onlineDevicesCount,
+    offline: offlineDevicesCount,
     warning: devices.filter(d => d.status?.toLowerCase() === 'warning').length,
   };
 
@@ -665,29 +474,24 @@ const StatusScreen = ({ navigation }) => {
             <View>
               <Text style={styles.headerTitle}>Device Status</Text>
               <Text style={styles.headerSubtitle}>
-                {devices.length} device{devices.length !== 1 ? 's' : ''} connected
+                {totalDevices} device{totalDevices !== 1 ? 's' : ''} connected
               </Text>
             </View>
             
-            {/* Real-time Mode Card */}
-            <TouchableOpacity 
-              onPress={toggleRealtimeUpdates}
-              activeOpacity={0.8}
+            {/* Real-time Mode Indicator (Always Active) */}
+            <LinearGradient
+              colors={['#10B98120', '#10B98110']}
+              style={styles.modeCard}
             >
-              <LinearGradient
-                colors={realtimeEnabled ? ['#10B98120', '#10B98110'] : ['#F59E0B20', '#F59E0B10']}
-                style={styles.modeCard}
-              >
-                <Ionicons 
-                  name={realtimeEnabled ? "flash" : "battery-charging"} 
-                  size={20} 
-                  color={realtimeEnabled ? "#10B981" : "#F59E0B"} 
-                />
-                <Text style={[styles.modeText, { color: realtimeEnabled ? "#10B981" : "#F59E0B" }]}>
-                  {realtimeEnabled ? "Real-time" : "Battery Saver"}
-                </Text>
-              </LinearGradient>
-            </TouchableOpacity>
+              <Ionicons 
+                name="flash" 
+                size={20} 
+                color="#10B981" 
+              />
+              <Text style={[styles.modeText, { color: "#10B981" }]}>
+                Real-time
+              </Text>
+            </LinearGradient>
           </View>
         </LinearGradient>
       </View>
@@ -700,11 +504,6 @@ const StatusScreen = ({ navigation }) => {
         <ScrollView 
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          onScrollBeginDrag={onScrollBeginDrag}
-          onMomentumScrollEnd={onMomentumScrollEnd}
-          onScrollEndDrag={onScrollEndDrag}
           refreshControl={
             <RefreshControl 
               refreshing={refreshing} 
@@ -723,7 +522,7 @@ const StatusScreen = ({ navigation }) => {
                 { key: 'online', label: 'Online', icon: 'checkmark-circle', color: '#10B981' },
                 { key: 'offline', label: 'Offline', icon: 'close-circle', color: '#EF4444' },
                 { key: 'warning', label: 'Warning', icon: 'warning', color: '#F59E0B' },
-              ].map((filter, index) => (
+              ].map((filter) => (
                 <TouchableOpacity
                   key={filter.key}
                   style={[
