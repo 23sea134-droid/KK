@@ -1,8 +1,9 @@
 // context/DeviceDataContext.js
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { getDatabase, ref, onValue, off } from 'firebase/database';
 import { useAuth } from './AuthContext';
+import { alertService } from '../services/alertService';
 
 const DeviceDataContext = createContext();
 
@@ -21,9 +22,12 @@ export const DeviceDataProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(Date.now());
   
+  // Refs for cleanup and state management
   const listenersRef = useRef({});
   const isMountedRef = useRef(true);
   const appStateRef = useRef(AppState.currentState);
+  const alertTrackerRef = useRef({});
+  const updateDebounceRef = useRef(null);
 
   // Cleanup all listeners
   const cleanupAllListeners = useCallback(() => {
@@ -40,8 +44,87 @@ export const DeviceDataProvider = ({ children }) => {
     listenersRef.current = {};
   }, []);
 
-  // Track alerts that have been triggered
-  const alertTrackerRef = useRef({});
+  // Debounced update function to prevent rapid re-renders
+  const debouncedUpdateDevices = useCallback((updatedDevices) => {
+    if (updateDebounceRef.current) {
+      clearTimeout(updateDebounceRef.current);
+    }
+    
+    updateDebounceRef.current = setTimeout(() => {
+      if (isMountedRef.current) {
+        setDevices(updatedDevices);
+        setLastUpdate(Date.now());
+      }
+    }, 100); // 100ms debounce
+  }, []);
+
+  // Handle leak detection
+  const handleLeakDetection = useCallback(async (device) => {
+    if (!device || !user?.uid) return;
+
+    const flowRate = device.flowRate || 0;
+    const valveState = device.valveState || 'UNKNOWN';
+    const leakAlertKey = `${device.deviceId}_leak`;
+    
+    // Leak detection: flow rate > 0.5 L/min when valve is closed
+    if (flowRate > 0.5 && valveState === 'CLOSED') {
+      if (!alertTrackerRef.current[leakAlertKey]) {
+        console.log(`💧 LEAK ALERT: Device ${device.deviceId} - Flow ${flowRate} L/min with valve CLOSED`);
+        alertTrackerRef.current[leakAlertKey] = Date.now();
+        
+        // Create leak alert
+        try {
+          await alertService.createLeakAlert(
+            user.uid,
+            device.deviceId,
+            device.name,
+            flowRate,
+            0 // duration in minutes - can be calculated if needed
+          );
+        } catch (error) {
+          console.error('Error creating leak alert:', error);
+        }
+      }
+    } else {
+      // Reset leak alert when conditions return to normal
+      if (alertTrackerRef.current[leakAlertKey] && 
+          (flowRate <= 0.5 || valveState === 'OPEN')) {
+        console.log(`✅ Leak condition resolved for device ${device.deviceId}`);
+        delete alertTrackerRef.current[leakAlertKey];
+      }
+    }
+  }, [user?.uid]);
+
+  // Handle low battery detection
+  const handleLowBatteryDetection = useCallback(async (device) => {
+    if (!device || !user?.uid) return;
+
+    const batteryLevel = device.batteryPercentage || 0;
+    const alertKey = `${device.deviceId}_battery`;
+    
+    if (batteryLevel < 20 && batteryLevel > 0) {
+      // Only alert once until battery goes above 25% (hysteresis)
+      if (!alertTrackerRef.current[alertKey] || alertTrackerRef.current[alertKey] > 25) {
+        console.log(`🔋 LOW BATTERY ALERT: Device ${device.deviceId} at ${batteryLevel}%`);
+        alertTrackerRef.current[alertKey] = batteryLevel;
+        
+        // Create low battery alert
+        try {
+          await alertService.createLowBatteryAlert(
+            user.uid,
+            device.deviceId,
+            device.name,
+            batteryLevel
+          );
+        } catch (error) {
+          console.error('Error creating low battery alert:', error);
+        }
+      }
+    } else if (batteryLevel >= 25) {
+      // Reset alert tracker when battery recovers
+      delete alertTrackerRef.current[alertKey];
+    }
+  }, [user?.uid]);
 
   // Setup real-time listeners for all user devices
   const setupDeviceListeners = useCallback(async () => {
@@ -55,14 +138,14 @@ export const DeviceDataProvider = ({ children }) => {
     try {
       const db = getDatabase();
       
-      // 1. Listen to user's device list
-      const userDevicesRef = ref(db, `users/${user.uid}/devices`);
-      const userDevicesUnsubscribe = onValue(
-        userDevicesRef,
+      // Listen to user's device list (claimedDevices)
+      const claimedDevicesRef = ref(db, `users/${user.uid}/claimedDevices`);
+      const claimedDevicesUnsubscribe = onValue(
+        claimedDevicesRef,
         async (snapshot) => {
           if (!isMountedRef.current) return;
           
-          console.log('📱 User devices list updated');
+          console.log('📱 User claimed devices list updated');
           
           if (!snapshot.exists()) {
             console.log('No devices found for user');
@@ -71,27 +154,13 @@ export const DeviceDataProvider = ({ children }) => {
             return;
           }
 
-          const devicesData = snapshot.val();
+          const claimedDeviceIds = Object.keys(snapshot.val());
           const devicesList = [];
-          const deviceIds = [];
 
-          // Process each device
-          for (const [key, device] of Object.entries(devicesData)) {
-            const deviceId = device.deviceId || key;
-            deviceIds.push(deviceId);
-
-            // Initial device data from user's list
-            devicesList.push({
-              id: key,
-              deviceId: deviceId,
-              name: device.name || 'Water Monitor',
-              location: device.location || 'Main Supply',
-              status: 'loading',
-              ...device
-            });
-
+          // Process each claimed device
+          for (const deviceId of claimedDeviceIds) {
             // Setup real-time listener for THIS device's data
-            if (!listenersRef.current[`device_${deviceId}`]) {
+            if (!listenersRef.current[`device_${deviceId}_data`]) {
               const deviceDataRef = ref(db, `devices/${deviceId}/data`);
               const deviceInfoRef = ref(db, `devices/${deviceId}/info`);
 
@@ -111,67 +180,13 @@ export const DeviceDataProvider = ({ children }) => {
                       batteryPercentage: deviceData.batteryPercentage
                     });
 
-                    // 🔥 CHECK FOR LOW BATTERY ALERT (below 20%)
-                    const batteryLevel = deviceData.batteryPercentage || 0;
-                    const alertKey = `${deviceId}_battery`;
-                    
-                    if (batteryLevel < 20 && batteryLevel > 0) {
-                      // Only alert once until battery goes above 25% (hysteresis)
-                      if (!alertTrackerRef.current[alertKey] || alertTrackerRef.current[alertKey] > 25) {
-                        console.log(`🔋 LOW BATTERY ALERT: Device ${deviceId} at ${batteryLevel}%`);
-                        alertTrackerRef.current[alertKey] = batteryLevel;
-                        
-                        // Trigger low battery alert (you can show notification here)
-                        if (window.alertService) {
-                          window.alertService.createAlert(user.uid, {
-                            type: 'low_battery',
-                            deviceId: deviceId,
-                            batteryLevel: batteryLevel
-                          });
-                        }
-                      }
-                    } else if (batteryLevel >= 25) {
-                      // Reset alert tracker when battery recovers
-                      delete alertTrackerRef.current[alertKey];
-                    }
-
-                    // 🔥 CHECK FOR LEAK ALERT (high flow rate when valve is closed)
-                    const flowRate = deviceData.flowRate || 0;
-                    const valveState = deviceData.valveState || 'UNKNOWN';
-                    const leakAlertKey = `${deviceId}_leak`;
-                    
-                    // Leak detection: flow rate > 0.5 L/min when valve is closed
-                    if (flowRate > 0.5 && valveState === 'CLOSED') {
-                      if (!alertTrackerRef.current[leakAlertKey]) {
-                        console.log(`💧 LEAK ALERT: Device ${deviceId} - Flow ${flowRate} L/min with valve CLOSED`);
-                        alertTrackerRef.current[leakAlertKey] = Date.now();
-                        
-                        // Trigger leak alert
-                        if (window.alertService) {
-                          window.alertService.createAlert(user.uid, {
-                            type: 'leak_detected',
-                            deviceId: deviceId,
-                            flowRate: flowRate,
-                            valveState: valveState
-                          });
-                        }
-                      }
-                    } else {
-                      // Reset leak alert when conditions return to normal
-                      if (alertTrackerRef.current[leakAlertKey] && 
-                          (flowRate <= 0.5 || valveState === 'OPEN')) {
-                        console.log(`✅ Leak condition resolved for device ${deviceId}`);
-                        delete alertTrackerRef.current[leakAlertKey];
-                      }
-                    }
-
+                    // Update devices state
                     setDevices(prevDevices => {
                       const updatedDevices = prevDevices.map(d => {
                         if (d.deviceId === deviceId) {
-                          return {
+                          const updated = {
                             ...d,
                             data: deviceData,
-                            // 🔥 ALL REAL-TIME METRICS
                             flowRate: deviceData.flowRate || 0,
                             totalUsage: deviceData.totalLitres || d.totalUsage || 0,
                             totalLitres: deviceData.totalLitres || 0,
@@ -184,13 +199,37 @@ export const DeviceDataProvider = ({ children }) => {
                             alertFlag: deviceData.alertFlag || false,
                             timestamp: deviceData.timestamp || Date.now(),
                             lastDataUpdate: Date.now(),
-                            // 🔥 ALERT FLAGS
-                            hasLowBattery: batteryLevel < 20 && batteryLevel > 0,
-                            hasLeak: flowRate > 0.5 && valveState === 'CLOSED',
                           };
+
+                          // Check for alerts
+                          handleLeakDetection(updated);
+                          handleLowBatteryDetection(updated);
+
+                          return updated;
                         }
                         return d;
                       });
+                      
+                      // If device doesn't exist yet, add it
+                      const deviceExists = updatedDevices.some(d => d.deviceId === deviceId);
+                      if (!deviceExists) {
+                        updatedDevices.push({
+                          id: deviceId,
+                          deviceId: deviceId,
+                          name: 'Water Monitor',
+                          location: 'Main Supply',
+                          status: 'loading',
+                          data: deviceData,
+                          flowRate: deviceData.flowRate || 0,
+                          totalUsage: deviceData.totalLitres || 0,
+                          totalLitres: deviceData.totalLitres || 0,
+                          valveState: deviceData.valveState || 'UNKNOWN',
+                          valveStatus: deviceData.valveState === 'OPEN' ? 'open' : 'closed',
+                          batteryLevel: deviceData.batteryPercentage || 0,
+                          batteryPercentage: deviceData.batteryPercentage || 0,
+                          lastDataUpdate: Date.now(),
+                        });
+                      }
                       
                       setLastUpdate(Date.now());
                       return updatedDevices;
@@ -222,6 +261,7 @@ export const DeviceDataProvider = ({ children }) => {
 
                     console.log(`ℹ️ Device ${deviceId} info updated:`, {
                       status: actualStatus,
+                      name: deviceInfo.name,
                       lastSeen: new Date(deviceInfo.lastSeen).toLocaleTimeString()
                     });
 
@@ -231,6 +271,8 @@ export const DeviceDataProvider = ({ children }) => {
                           return {
                             ...d,
                             info: deviceInfo,
+                            name: deviceInfo.name || deviceInfo.deviceName || d.name,
+                            location: deviceInfo.location || d.location,
                             status: actualStatus,
                             lastSeen: deviceInfo.lastSeen,
                             batteryPercentage: deviceInfo.batteryPercentage || d.batteryLevel,
@@ -239,6 +281,23 @@ export const DeviceDataProvider = ({ children }) => {
                         }
                         return d;
                       });
+                      
+                      // If device doesn't exist yet, add it with info
+                      const deviceExists = updatedDevices.some(d => d.deviceId === deviceId);
+                      if (!deviceExists) {
+                        updatedDevices.push({
+                          id: deviceId,
+                          deviceId: deviceId,
+                          name: deviceInfo.name || deviceInfo.deviceName || 'Water Monitor',
+                          location: deviceInfo.location || 'Main Supply',
+                          status: actualStatus,
+                          info: deviceInfo,
+                          lastSeen: deviceInfo.lastSeen,
+                          batteryLevel: deviceInfo.batteryPercentage || 0,
+                          batteryPercentage: deviceInfo.batteryPercentage || 0,
+                          lastInfoUpdate: Date.now(),
+                        });
+                      }
                       
                       setLastUpdate(Date.now());
                       return updatedDevices;
@@ -254,9 +313,19 @@ export const DeviceDataProvider = ({ children }) => {
               listenersRef.current[`device_${deviceId}_data`] = dataUnsubscribe;
               listenersRef.current[`device_${deviceId}_info`] = infoUnsubscribe;
             }
+
+            // Add to initial devices list if not already there
+            devicesList.push({
+              id: deviceId,
+              deviceId: deviceId,
+              name: 'Water Monitor',
+              location: 'Main Supply',
+              status: 'loading',
+              totalUsage: 0,
+            });
           }
 
-          // Set initial devices list
+          // Set initial devices list (will be enriched by listeners)
           if (isMountedRef.current) {
             setDevices(prevDevices => {
               // Merge with existing data to keep real-time updates
@@ -274,7 +343,7 @@ export const DeviceDataProvider = ({ children }) => {
             .map(key => key.split('_')[1]);
           
           currentDeviceIds.forEach(existingId => {
-            if (!deviceIds.includes(existingId)) {
+            if (!claimedDeviceIds.includes(existingId)) {
               console.log(`🗑️ Removing listeners for deleted device: ${existingId}`);
               if (listenersRef.current[`device_${existingId}_data`]) {
                 listenersRef.current[`device_${existingId}_data`]();
@@ -296,7 +365,7 @@ export const DeviceDataProvider = ({ children }) => {
         }
       );
 
-      listenersRef.current.userDevices = userDevicesUnsubscribe;
+      listenersRef.current.claimedDevices = claimedDevicesUnsubscribe;
 
     } catch (error) {
       console.error('Error setting up device listeners:', error);
@@ -305,8 +374,9 @@ export const DeviceDataProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [user?.uid]);
+  }, [user?.uid, handleLeakDetection, handleLowBatteryDetection]);
 
+  // Start battery monitoring for all devices
   // Handle app state changes
   const handleAppStateChange = useCallback((nextAppState) => {
     if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
@@ -339,41 +409,62 @@ export const DeviceDataProvider = ({ children }) => {
       isMountedRef.current = false;
       cleanupAllListeners();
       subscription?.remove();
+      
+      // Clear debounce timer
+      if (updateDebounceRef.current) {
+        clearTimeout(updateDebounceRef.current);
+      }
     };
   }, [user?.uid, setupDeviceListeners, handleAppStateChange, cleanupAllListeners]);
 
   // Calculate total usage across all devices
-  const totalUsage = devices.reduce((sum, device) => {
-    return sum + (parseFloat(device.totalUsage) || parseFloat(device.totalLitres) || 0);
-  }, 0);
+  const totalUsage = useMemo(() => {
+    return devices.reduce((sum, device) => {
+      return sum + (parseFloat(device.totalUsage) || parseFloat(device.totalLitres) || 0);
+    }, 0);
+  }, [devices]);
 
-  // 🔥 Calculate aggregate flow metrics across all devices
-  const flowMetrics = devices.reduce((metrics, device) => {
-    const flowRate = device.flowRate || 0;
-    
-    if (flowRate > 0) {
-      metrics.activeDevices += 1;
-      metrics.totalFlow += flowRate;
-      metrics.peakFlow = Math.max(metrics.peakFlow, flowRate);
-    }
-    
-    return metrics;
-  }, { activeDevices: 0, totalFlow: 0, peakFlow: 0 });
+  // Calculate aggregate flow metrics across all devices
+  const flowMetrics = useMemo(() => {
+    return devices.reduce((metrics, device) => {
+      const flowRate = device.flowRate || 0;
+      
+      if (flowRate > 0) {
+        metrics.activeDevices += 1;
+        metrics.totalFlow += flowRate;
+        metrics.peakFlow = Math.max(metrics.peakFlow, flowRate);
+      }
+      
+      return metrics;
+    }, { activeDevices: 0, totalFlow: 0, peakFlow: 0 });
+  }, [devices]);
 
-  const averageFlow = flowMetrics.activeDevices > 0 
-    ? flowMetrics.totalFlow / flowMetrics.activeDevices 
-    : 0;
+  const averageFlow = useMemo(() => {
+    return flowMetrics.activeDevices > 0 
+      ? flowMetrics.totalFlow / flowMetrics.activeDevices 
+      : 0;
+  }, [flowMetrics]);
 
-  // 🔥 Count devices with alerts
-  const alertCounts = devices.reduce((counts, device) => {
-    if (device.hasLowBattery) counts.lowBattery += 1;
-    if (device.hasLeak) counts.leak += 1;
-    if (device.status?.toLowerCase() === 'offline') counts.offline += 1;
-    return counts;
-  }, { lowBattery: 0, leak: 0, offline: 0 });
+  // Count devices with alerts
+  const alertCounts = useMemo(() => {
+    return devices.reduce((counts, device) => {
+      const batteryLevel = device.batteryPercentage || device.batteryLevel || 0;
+      const flowRate = device.flowRate || 0;
+      const valveState = device.valveState || 'UNKNOWN';
+      const status = device.status?.toLowerCase() || 'unknown';
+      
+      if (batteryLevel < 20 && batteryLevel > 0) counts.lowBattery += 1;
+      if (flowRate > 0.5 && valveState === 'CLOSED') counts.leak += 1;
+      if (status === 'offline') counts.offline += 1;
+      
+      return counts;
+    }, { lowBattery: 0, leak: 0, offline: 0 });
+  }, [devices]);
 
-  // 🔥 Calculate total alerts
-  const totalAlerts = alertCounts.lowBattery + alertCounts.leak + alertCounts.offline;
+  // Calculate total alerts
+  const totalAlerts = useMemo(() => {
+    return alertCounts.lowBattery + alertCounts.leak + alertCounts.offline;
+  }, [alertCounts]);
 
   // Refresh function for manual refresh
   const refreshDevices = useCallback(async () => {
@@ -387,23 +478,66 @@ export const DeviceDataProvider = ({ children }) => {
     return devices.find(d => d.deviceId === deviceId || d.id === deviceId);
   }, [devices]);
 
-  const value = {
+  // Get devices by status
+  const getDevicesByStatus = useCallback((status) => {
+    return devices.filter(d => d.status?.toLowerCase() === status.toLowerCase());
+  }, [devices]);
+
+  // Get online devices count
+  const onlineDevicesCount = useMemo(() => {
+    return devices.filter(d => d.status?.toLowerCase() === 'online').length;
+  }, [devices]);
+
+  // Get offline devices count
+  const offlineDevicesCount = useMemo(() => {
+    return devices.filter(d => d.status?.toLowerCase() === 'offline').length;
+  }, [devices]);
+
+  // Context value with memoization
+  const value = useMemo(() => ({
+    // Device data
     devices,
     loading,
     error,
-    totalUsage,
     lastUpdate,
-    refreshDevices,
-    getDeviceById,
-    // 🔥 FLOW METRICS
+    
+    // Aggregate metrics
+    totalUsage,
     averageFlow,
     peakFlow: flowMetrics.peakFlow,
     activeDevices: flowMetrics.activeDevices,
-    // 🔥 ALERT METRICS
+    
+    // Device counts
+    totalDevices: devices.length,
+    onlineDevicesCount,
+    offlineDevicesCount,
+    
+    // Alert metrics
     alertCounts,
     totalAlerts,
     hasActiveAlerts: totalAlerts > 0,
-  };
+    
+    // Helper functions
+    refreshDevices,
+    getDeviceById,
+    getDevicesByStatus,
+  }), [
+    devices,
+    loading,
+    error,
+    lastUpdate,
+    totalUsage,
+    averageFlow,
+    flowMetrics.peakFlow,
+    flowMetrics.activeDevices,
+    onlineDevicesCount,
+    offlineDevicesCount,
+    alertCounts,
+    totalAlerts,
+    refreshDevices,
+    getDeviceById,
+    getDevicesByStatus,
+  ]);
 
   return (
     <DeviceDataContext.Provider value={value}>
@@ -411,3 +545,4 @@ export const DeviceDataProvider = ({ children }) => {
     </DeviceDataContext.Provider>
   );
 };
+
