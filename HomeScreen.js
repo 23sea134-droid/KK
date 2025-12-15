@@ -17,12 +17,13 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
+import { useDeviceData } from '../context/DeviceDataContext';
 import { deviceService } from '../services/deviceService';
-import { alertService } from '../services/alertService'; // NEW
+import { alertService } from '../services/alertService';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTabBar } from '../context/TabBarContext';
 import { useScrollHandler } from '../hooks/useScrollHandler';
-import { getDatabase, ref, onValue, off } from 'firebase/database'; // ADDED THIS IMPORT
+import { getDatabase, ref, onValue } from 'firebase/database';
 import Svg, { 
   Circle, 
   Defs, 
@@ -51,9 +52,17 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 const DEFAULT_DAILY_USAGE = 5000;
 
 const HomeScreen = ({ navigation }) => {
-  const { user, updateUserName } = useAuth(); // Added updateUserName if needed
+  const { user } = useAuth();
   const { showTabBar } = useTabBar();
   
+  // Use DeviceDataContext instead of local state
+  const { 
+    devices, 
+    loading, 
+    totalUsage,
+    refreshDevices,
+  } = useDeviceData();
+
   const { 
     handleScroll, 
     onScrollBeginDrag,
@@ -62,20 +71,15 @@ const HomeScreen = ({ navigation }) => {
   } = useScrollHandler();
 
   // State Management
-  const [devices, setDevices] = useState([]);
-  const [totalUsage, setTotalUsage] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [dailyGoal, setDailyGoal] = useState(DEFAULT_DAILY_USAGE);
   const [showGoalModal, setShowGoalModal] = useState(false);
   const [tempGoal, setTempGoal] = useState('');
   const [userName, setUserName] = useState('');
-  const [unreadAlerts, setUnreadAlerts] = useState(0); // NEW
+  const [unreadAlerts, setUnreadAlerts] = useState(0);
 
-  const appStateRef = useRef(AppState.currentState);
-  const unsubscribeRef = useRef(null);
-  const unsubscribeAlertsRef = useRef(null); // NEW
-  const profileUnsubscribeRef = useRef(null); // NEW: For profile listener
+  const unsubscribeAlertsRef = useRef(null);
+  const profileUnsubscribeRef = useRef(null);
   const isMountedRef = useRef(true);
 
   // Animation Values
@@ -83,16 +87,15 @@ const HomeScreen = ({ navigation }) => {
   const pulseAnim = useSharedValue(1);
   const modalScale = useSharedValue(0);
 
-  // Initialize user name - UPDATED to use user.displayName
+  // Initialize user name
   useEffect(() => {
     if (user) {
-      // Always use displayName from auth context first, then fallback
       const name = user.displayName || user.email?.split('@')[0] || 'User';
       setUserName(name);
     }
-  }, [user?.displayName, user?.email]); // Watch for displayName changes specifically
+  }, [user?.displayName, user?.email]);
 
-  // NEW: Setup real-time listener for profile changes in Firebase
+  // Setup real-time listener for profile changes in Firebase
   useEffect(() => {
     if (!user?.uid) return;
     
@@ -107,7 +110,6 @@ const HomeScreen = ({ navigation }) => {
           const profileData = snapshot.val();
           console.log('Profile data updated:', profileData);
           
-          // Update userName if profile name exists
           if (profileData.name) {
             console.log('Profile name updated to:', profileData.name);
             setUserName(profileData.name);
@@ -130,7 +132,7 @@ const HomeScreen = ({ navigation }) => {
     }
   }, [user?.uid]);
 
-  // NEW: Setup alerts listener
+  // Setup alerts listener
   useEffect(() => {
     if (!user?.uid) return;
 
@@ -237,113 +239,35 @@ const HomeScreen = ({ navigation }) => {
     strokeDashoffset: CIRCUMFERENCE * (1 - progress.value),
   }));
 
-  const calculateTotalUsage = useCallback((deviceList) => {
-    if (!Array.isArray(deviceList)) return;
-    const total = deviceList.reduce((sum, device) => {
-      return sum + (parseFloat(device.totalUsage) || 0);
-    }, 0);
-    setTotalUsage(total);
-  }, []);
-
-  const setupDeviceListener = useCallback(() => {
-    if (!user?.uid) return null;
-    try {
-      const unsubscribe = deviceService.listenToDeviceStatus(
-        user.uid, 
-        (updatedDevices) => {
-          if (!isMountedRef.current) return;
-          if (Array.isArray(updatedDevices)) {
-            setDevices(updatedDevices);
-            calculateTotalUsage(updatedDevices);
-          }
-          setLoading(false);
-        },
-        (error) => {
-          console.error('Device listener error:', error);
-          if (isMountedRef.current) {
-            setLoading(false);
-            Alert.alert('Error', 'Failed to load device data. Please try again.');
-          }
-        }
-      );
-      return unsubscribe;
-    } catch (error) {
-      console.error('Setup device listener error:', error);
-      setLoading(false);
-      return null;
-    }
-  }, [user?.uid, calculateTotalUsage]);
-
-  const handleAppStateChange = useCallback((nextAppState) => {
-    if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-      if (unsubscribeRef.current) unsubscribeRef.current();
-      const newUnsubscribe = setupDeviceListener();
-      unsubscribeRef.current = newUnsubscribe;
-      
-      // Also restart alerts listener
-      if (unsubscribeAlertsRef.current) {
-        unsubscribeAlertsRef.current();
-        unsubscribeAlertsRef.current = null;
-      }
-    } else if (nextAppState.match(/inactive|background/)) {
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
-      if (unsubscribeAlertsRef.current) {
-        unsubscribeAlertsRef.current();
-        unsubscribeAlertsRef.current = null;
-      }
-    }
-    appStateRef.current = nextAppState;
-  }, [setupDeviceListener]);
-
+  // Cleanup on unmount
   useEffect(() => {
     isMountedRef.current = true;
-    if (user?.uid) {
-      const unsubscribe = setupDeviceListener();
-      unsubscribeRef.current = unsubscribe;
-    } else {
-      setLoading(false);
-    }
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
     return () => {
       isMountedRef.current = false;
-      subscription?.remove();
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
       if (unsubscribeAlertsRef.current) {
         unsubscribeAlertsRef.current();
         unsubscribeAlertsRef.current = null;
       }
-      // Clean up profile listener
       if (profileUnsubscribeRef.current) {
         profileUnsubscribeRef.current();
         profileUnsubscribeRef.current = null;
       }
     };
-  }, [user?.uid, setupDeviceListener, handleAppStateChange]);
+  }, []);
 
   const onRefresh = useCallback(async () => {
     if (!user?.uid) return;
     setRefreshing(true);
     try {
-      const result = await deviceService.getUserDevices(user.uid);
-      if (result.success && isMountedRef.current) {
-        setDevices(result.devices || []);
-        calculateTotalUsage(result.devices || []);
-      } else if (!result.success) {
-        Alert.alert('Error', result.error || 'Failed to refresh device data');
-      }
+      await refreshDevices();
     } catch (error) {
       console.error('Refresh error:', error);
       Alert.alert('Error', 'Failed to refresh device data');
     } finally {
       if (isMountedRef.current) setRefreshing(false);
     }
-  }, [user?.uid, calculateTotalUsage]);
+  }, [user?.uid, refreshDevices]);
 
   const handleGoalPress = useCallback(() => {
     setTempGoal(dailyGoal.toString());
@@ -373,11 +297,9 @@ const HomeScreen = ({ navigation }) => {
             text: 'Confirm',
             onPress: async () => {
               try {
-                // Pass deviceId directly (not userId)
                 const result = await deviceService.controlValve(deviceId, newStatus === 'open');
                 if (result.success) {
                   Alert.alert('Success', `Valve ${newStatus} successfully`);
-                  // Refresh device list to show updated state
                   onRefresh();
                 } else {
                   Alert.alert('Error', result.error || 'Failed to control valve');
@@ -414,7 +336,6 @@ const HomeScreen = ({ navigation }) => {
     }
   }, [navigation]);
 
-  // NEW: Navigate to alerts screen
   const handleAlertsPress = useCallback(() => {
     navigation.navigate('Alerts');
   }, [navigation]);
@@ -443,9 +364,9 @@ const HomeScreen = ({ navigation }) => {
   const renderDeviceCard = useCallback((device, index) => {
     return (
       <TouchableOpacity 
-        key={device.id || index}
+        key={device.deviceId || device.id || index}
         style={styles.deviceCard}
-        onPress={() => navigation.navigate('DeviceDetail', { deviceId: device.id })}
+        onPress={() => navigation.navigate('DeviceDetail', { deviceId: device.deviceId || device.id })}
         activeOpacity={0.85}
       >
         <LinearGradient
@@ -474,25 +395,28 @@ const HomeScreen = ({ navigation }) => {
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>Today's Usage</Text>
               <Text style={styles.statValue}>
-                {formatUsage(device.todayUsage || device.totalUsage || 0)}
+                {formatUsage(device.totalUsage || device.totalLitres || 0)}
               </Text>
             </View>
             
-            {device.hasValve && (
+            {(device.valveState || device.valveStatus) && (
               <TouchableOpacity
                 style={[
                   styles.valveButton,
                   { 
-                    backgroundColor: device.valveStatus === 'open' ? '#10B98120' : '#EF444420',
-                    borderColor: device.valveStatus === 'open' ? '#10B981' : '#EF4444'
+                    backgroundColor: (device.valveStatus === 'open' || device.valveState === 'OPEN') ? '#10B98120' : '#EF444420',
+                    borderColor: (device.valveStatus === 'open' || device.valveState === 'OPEN') ? '#10B981' : '#EF4444'
                   }
                 ]}
-                onPress={() => handleValveControl(device.id, device.valveStatus)}
+                onPress={() => handleValveControl(
+                  device.deviceId || device.id, 
+                  device.valveStatus || (device.valveState === 'OPEN' ? 'open' : 'closed')
+                )}
               >
                 <Ionicons 
-                  name={device.valveStatus === 'open' ? 'water' : 'water-outline'} 
+                  name={(device.valveStatus === 'open' || device.valveState === 'OPEN') ? 'water' : 'water-outline'} 
                   size={18} 
-                  color={device.valveStatus === 'open' ? '#10B981' : '#EF4444'} 
+                  color={(device.valveStatus === 'open' || device.valveState === 'OPEN') ? '#10B981' : '#EF4444'} 
                 />
               </TouchableOpacity>
             )}
@@ -1238,3 +1162,4 @@ const styles = StyleSheet.create({
 });
 
 export default HomeScreen;
+    
