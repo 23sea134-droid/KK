@@ -300,13 +300,13 @@
     },
 
     /* ================================
-       4. History Data - CRITICAL FIX
+       4. History Data
        ================================ */
     "history": {
       "$deviceId": {
         // Only device owner can read history
         ".read": "auth != null && root.child('deviceOwners').child($deviceId).val() === auth.uid",
-        // Device can write history without authentication - CRITICAL FIX
+        // Device can write history without authentication
         ".write": true,
         ".indexOn": ["timestamp"],
 
